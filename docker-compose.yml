@@ -3,7 +3,7 @@ services:
     build: ./backend
     container_name: stock-insight-backend
     volumes:
-      - ./backend/stock_insight.db:/app/stock_insight.db
+      - ./backend:/app
       - ./backend/.env:/app/.env
     ports:
       - "8000:8000"
