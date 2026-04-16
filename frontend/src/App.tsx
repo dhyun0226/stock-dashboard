@@ -17,18 +17,22 @@ interface PortfolioItem {
   quantity: number;
   entryDate: string;
 }
-
 function App() {
   const [market, setMarket] = useState<'US' | 'KR'>('US');
   const [ticker, setTicker] = useState('AAPL');
   const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
+  const [scanStatus, setScanStatus] = useState({ status: 'IDLE', percent: 0 });
   const [loading, setLoading] = useState(false);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
   useEffect(() => {
     fetchPortfolio();
-    const interval = setInterval(fetchPortfolio, 60000); // 1분마다 자동 갱신
+    fetchScanStatus();
+    const interval = setInterval(() => {
+      fetchPortfolio();
+      fetchScanStatus();
+    }, 5000); // 5초마다 갱신
     return () => clearInterval(interval);
   }, [market]);
 
@@ -44,9 +48,30 @@ function App() {
     } catch (err) { console.error(err); }
   };
 
+  const fetchScanStatus = async () => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/scan-status?market=${market}`);
+      setScanStatus(res.data);
+    } catch (err) { console.error(err); }
+  };
+
   const renderChart = async () => {
-    if (!chartContainerRef.current) return;
-    if (chartRef.current) chartRef.current.remove();
+...
+  return (
+    <div className="app-container">
+      {scanStatus.status !== 'IDLE' && (
+        <div className="progress-overlay">
+          <div className="progress-card">
+            <h4>{market === 'KR' ? '한국' : '미국'} 전 종목 AI 스캔 중...</h4>
+            <div className="progress-bar-container">
+              <div className="progress-bar-fill" style={{ width: `${scanStatus.percent}%` }}></div>
+            </div>
+            <div className="progress-text">{scanStatus.percent}% 완료</div>
+          </div>
+        </div>
+      )}
+
+      <header className="main-header">
 
     const chart = createChart(chartContainerRef.current, {
       layout: { background: { type: ColorType.Solid, color: '#0f1117' }, textColor: '#d1d4dc' },

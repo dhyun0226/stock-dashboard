@@ -30,6 +30,12 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MY_BUDGET_KRW = int(os.getenv("MY_BUDGET_KRW", 10000000))
 MY_BUDGET_USD = int(os.getenv("MY_BUDGET_USD", 10000))
 
+# 스캔 상태 추적을 위한 전역 변수
+scan_progress = {
+    "US": {"status": "IDLE", "current": 0, "total": 0, "percent": 0},
+    "KR": {"status": "IDLE", "current": 0, "total": 0, "percent": 0}
+}
+
 def send_telegram_message(message: str):
     if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN": return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -84,8 +90,11 @@ def calculate_strategy(ticker, price, hist, budget):
 # --- ENGINE ---
 
 def run_full_market_scan(market: str):
+    global scan_progress
     tickers = []
     name_map = {}
+    
+    scan_progress[market] = {"status": "STARTING", "current": 0, "total": 0, "percent": 0}
     
     if market == "US":
         tickers = [
@@ -94,12 +103,8 @@ def run_full_market_scan(market: str):
             "MRK", "ADBE", "CRM", "CVX", "NFLX", "AMD", "PEP", "TMO", "KO", "WMT"
         ]
     else:
-        print("Fetching all KRX tickers...")
         df_krx = fdr.StockListing('KRX')
-        # FinanceDataReader의 컬럼명은 버전/거래소에 따라 'Code' 또는 'Symbol'일 수 있습니다.
         code_col = 'Code' if 'Code' in df_krx.columns else 'Symbol'
-        name_col = 'Name'
-        
         for _, row in df_krx.iterrows():
             symbol = row[code_col]
             m_type = row['Market']
@@ -107,18 +112,19 @@ def run_full_market_scan(market: str):
             elif m_type == 'KOSDAQ': t = f"{symbol}.KQ"
             else: continue
             tickers.append(t)
-            name_map[t] = row[name_col]
+            name_map[t] = row['Name']
+    
+    total_count = len(tickers)
+    scan_progress[market] = {"status": "SCANNING", "current": 0, "total": total_count, "percent": 0}
     
     budget = MY_BUDGET_USD if market == "US" else MY_BUDGET_KRW
     currency = "$" if market == "US" else "원"
-    
-    print(f"Starting {market} Scan: {len(tickers)} targets.")
     
     try:
         batch_size = 100
         scanned = []
         
-        for i in range(0, len(tickers), batch_size):
+        for i in range(0, total_count, batch_size):
             batch = tickers[i:i+batch_size]
             try:
                 data = yf.download(batch, period="1y", group_by="ticker", threads=True, progress=False)
@@ -137,7 +143,7 @@ def run_full_market_scan(market: str):
                         if sma50 > sma200: score += 20
                         if curr_price > close.iloc[-5]: score += 10
                         
-                        if market == "KR" and curr_price < 1000: return None # 동전주 제외
+                        if market == "KR" and curr_price < 1000: return None
                         
                         qty, target, stop = calculate_strategy(ticker, curr_price, hist, budget)
                         return {
@@ -150,7 +156,12 @@ def run_full_market_scan(market: str):
                 with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                     batch_res = [r for r in list(executor.map(analyze, batch)) if r]
                 scanned.extend(batch_res)
-                print(f"Progress: {i+len(batch)}/{len(tickers)}")
+                
+                # 진행률 업데이트
+                current_done = min(i + batch_size, total_count)
+                percent = int((current_done / total_count) * 100)
+                scan_progress[market] = {"status": "SCANNING", "current": current_done, "total": total_count, "percent": percent}
+                
             except: continue
         
         scanned.sort(key=lambda x: x['score'], reverse=True)
@@ -165,6 +176,8 @@ def run_full_market_scan(market: str):
                     item.current_price = s['entry_price']
                     item.save()
         
+        scan_progress[market] = {"status": "IDLE", "current": 0, "total": 0, "percent": 0}
+        
         msg = f"📍 *[AI 가이드] 오늘의 {market} 핵심 전략*\n\n"
         for i in top_10:
             msg += f"✅ *{i['name']}* ({i['ticker']})\n"
@@ -174,7 +187,9 @@ def run_full_market_scan(market: str):
             msg += f"   • 손절가: `{i['stop_loss']:,}{currency}`\n\n"
         send_telegram_message(msg)
         
-    except Exception as e: print(f"Scan error: {e}")
+    except Exception as e: 
+        print(f"Scan error: {e}")
+        scan_progress[market] = {"status": "IDLE", "current": 0, "total": 0, "percent": 0}
 
 def monitor_market_signals():
     now = datetime.datetime.now()
@@ -205,6 +220,10 @@ async def get_ai_portfolio(market: str = "US"):
         "targetPrice": i.target_price, "stopLoss": i.stop_loss, "quantity": i.quantity,
         "entryDate": i.entry_date.strftime('%Y-%m-%d'), "status": i.status
     } for i in items]
+
+@app.get("/api/scan-status")
+async def get_scan_status(market: str = "KR"):
+    return scan_progress.get(market, {"status": "IDLE", "percent": 0})
 
 @app.get("/api/stocks/{ticker}/history")
 async def get_stock_history(ticker: str):
