@@ -96,14 +96,18 @@ def run_full_market_scan(market: str):
     else:
         print("Fetching all KRX tickers...")
         df_krx = fdr.StockListing('KRX')
+        # FinanceDataReader의 컬럼명은 버전/거래소에 따라 'Code' 또는 'Symbol'일 수 있습니다.
+        code_col = 'Code' if 'Code' in df_krx.columns else 'Symbol'
+        name_col = 'Name'
+        
         for _, row in df_krx.iterrows():
-            symbol = row['Symbol']
+            symbol = row[code_col]
             m_type = row['Market']
             if m_type == 'KOSPI': t = f"{symbol}.KS"
             elif m_type == 'KOSDAQ': t = f"{symbol}.KQ"
             else: continue
             tickers.append(t)
-            name_map[t] = row['Name']
+            name_map[t] = row[name_col]
     
     budget = MY_BUDGET_USD if market == "US" else MY_BUDGET_KRW
     currency = "$" if market == "US" else "원"
