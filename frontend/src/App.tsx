@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { createChart, IChartApi, ColorType } from 'lightweight-charts';
+import { createChart, type IChartApi, ColorType } from 'lightweight-charts';
 import './App.css';
 
 const API_BASE_URL = 'http://134.185.114.170:8000/api';
