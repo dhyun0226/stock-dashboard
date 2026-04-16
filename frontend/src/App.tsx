@@ -19,8 +19,8 @@ interface PortfolioItem {
 }
 
 function App() {
-  const [market, setMarket] = useState<'US' | 'KR'>('US');
-  const [ticker, setTicker] = useState('AAPL');
+  const [market, setMarket] = useState<'US' | 'KOSPI' | 'KOSDAQ'>('KOSPI');
+  const [ticker, setTicker] = useState('');
   const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
   const [scanStatus, setScanStatus] = useState({ status: 'IDLE', percent: 0 });
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -43,7 +43,7 @@ function App() {
       }
     };
     window.addEventListener('resize', handleResize);
-    renderChart();
+    if (ticker) renderChart();
     return () => window.removeEventListener('resize', handleResize);
   }, [ticker]);
 
@@ -63,7 +63,7 @@ function App() {
   };
 
   const renderChart = async () => {
-    if (!chartContainerRef.current) return;
+    if (!chartContainerRef.current || !ticker) return;
     if (chartRef.current) chartRef.current.remove();
 
     const chart = createChart(chartContainerRef.current, {
@@ -86,7 +86,7 @@ function App() {
       {scanStatus.status !== 'IDLE' && (
         <div className="progress-overlay">
           <div className="progress-card">
-            <h4>{market === 'KR' ? '한국' : '미국'} 전 종목 AI 스캔 중...</h4>
+            <h4>{market} AI 전체 스캔 중...</h4>
             <div className="progress-bar-container">
               <div className="progress-bar-fill" style={{ width: `${scanStatus.percent}%` }}></div>
             </div>
@@ -98,25 +98,26 @@ function App() {
       <header className="main-header">
         <div className="brand">주식<span>인사이트</span> AI</div>
         <div className="market-switches">
-          <button className={market === 'US' ? 'active' : ''} onClick={() => setMarket('US')}>미국 시장</button>
-          <button className={market === 'KR' ? 'active' : ''} onClick={() => setMarket('KR')}>한국 시장</button>
+          <button className={market === 'US' ? 'active' : ''} onClick={() => setMarket('US')}>미국주식</button>
+          <button className={market === 'KOSPI' ? 'active' : ''} onClick={() => setMarket('KOSPI')}>코스피</button>
+          <button className={market === 'KOSDAQ' ? 'active' : ''} onClick={() => setMarket('KOSDAQ')}>코스닥</button>
         </div>
       </header>
 
       <main className="main-layout">
         <section className="portfolio-section card">
           <div className="section-header">
-            <h3>AI 액티브 포트폴리오 (상위 10선)</h3>
-            <span className="live-badge">실시간 모니터링</span>
+            <h3>{market} AI TOP 10 포트폴리오</h3>
+            <span className="live-badge">실시간 분석</span>
           </div>
           <div className="portfolio-table-wrapper">
             <table className="portfolio-table">
               <thead>
                 <tr>
                   <th>종목</th>
-                  <th>매수 권장가</th>
+                  <th>권장가</th>
                   <th>현재가</th>
-                  <th>수익률 (최고)</th>
+                  <th>수익률</th>
                   <th>목표(손절)</th>
                   <th>수량</th>
                 </tr>
@@ -135,8 +136,8 @@ function App() {
                       <div className="max-yield">최고: {item.maxYield}%</div>
                     </td>
                     <td>
-                      <div className="target">목표: {item.targetPrice.toLocaleString()}</div>
-                      <div className="stop">손절: {item.stopLoss.toLocaleString()}</div>
+                      <div className="target">T: {item.targetPrice.toLocaleString()}</div>
+                      <div className="stop">S: {item.stopLoss.toLocaleString()}</div>
                     </td>
                     <td>{item.quantity}주</td>
                   </tr>
@@ -148,7 +149,7 @@ function App() {
 
         <section className="chart-section card">
           <div className="chart-header">
-            <h2>{ticker} 실시간 AI 분석 차트</h2>
+            <h2>{ticker || '종목을 선택하세요'} 실시간 차트</h2>
           </div>
           <div ref={chartContainerRef} className="chart-box"></div>
         </section>
