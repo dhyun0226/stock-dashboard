@@ -1,0 +1,20 @@
+# Dependency directories
+node_modules/
+backend/venv/
+backend/__pycache__/
+
+# Environment variables
+backend/.env
+
+# SSH keys
+ssh-key-*
+
+# Build outputs
+frontend/dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Gemini CLI
+.gemini/
