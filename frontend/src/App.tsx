@@ -3,7 +3,7 @@ import axios from 'axios';
 import { createChart, IChartApi, ColorType } from 'lightweight-charts';
 import './App.css';
 
-const API_BASE_URL = 'http://localhost:8000/api';
+const API_BASE_URL = 'http://134.185.114.170:8000/api';
 
 interface PortfolioItem {
   ticker: string;
