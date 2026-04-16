@@ -37,7 +37,14 @@ function App() {
   }, [market]);
 
   useEffect(() => {
+    const handleResize = () => {
+      if (chartRef.current && chartContainerRef.current) {
+        chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+      }
+    };
+    window.addEventListener('resize', handleResize);
     renderChart();
+    return () => window.removeEventListener('resize', handleResize);
   }, [ticker]);
 
   const fetchPortfolio = async () => {
