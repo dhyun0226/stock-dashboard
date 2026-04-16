@@ -38,7 +38,7 @@ scan_progress = {
 }
 
 def send_telegram_message(message: str):
-    if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN" or not TELEGRAM_BOT_TOKEN: return
+    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN": return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try: requests.post(url, json=payload)
@@ -48,7 +48,7 @@ def send_telegram_message(message: str):
 db = SqliteDatabase('stock_insight.db')
 
 class PortfolioItem(Model):
-    market = CharField() # US, KOSPI, KOSDAQ
+    market = CharField()
     ticker = CharField()
     name = CharField()
     entry_price = FloatField()
@@ -70,6 +70,7 @@ db.create_tables([PortfolioItem])
 # --- CLASSIC INDICATORS ---
 
 def calculate_rsi(series, period=14):
+    if len(series) < period + 1: return pd.Series([50] * len(series))
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -80,10 +81,11 @@ def calculate_strategy(ticker, price, hist, budget):
     try:
         high_low = hist['High'] - hist['Low']
         atr = high_low.rolling(window=14).mean().iloc[-1]
+        if pd.isna(atr) or atr == 0: atr = price * 0.02
         stop_loss = price - (atr * 2.0)
         risk_per_share = price - stop_loss
         quantity = int((budget * 0.02) / risk_per_share) if risk_per_share > 0 else 1
-        target_price = price + (risk_per_share * 3.0) # 리스크 대비 보상비 1:1.5 적용
+        target_price = price + (risk_per_share * 3.0)
         return max(1, quantity), round(target_price, 2), round(stop_loss, 2)
     except:
         return 1, round(price * 1.15, 2), round(price * 0.90, 2)
@@ -95,27 +97,40 @@ def run_full_market_scan(market: str):
     tickers = []
     name_map = {}
     
+    print(f"[{market}] Starting Scan Optimization...")
+    
     if market == "US":
         tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "AVGO", "NFLX", "AMD", "PLTR", "WMT", "COST", "CRM", "ADBE"]
     else:
-        df_krx = fdr.StockListing('KRX')
-        code_col = 'Code' if 'Code' in df_krx.columns else 'Symbol'
-        # KOSPI 또는 KOSDAQ 필터링
-        target_market = 'KOSPI' if market == 'KOSPI' else 'KOSDAQ'
-        df_filtered = df_krx[df_krx['Market'] == target_market]
-        
-        for _, row in df_filtered.iterrows():
-            symbol = row[code_col]
-            t = f"{symbol}.KS" if market == 'KOSPI' else f"{symbol}.KQ"
-            tickers.append(t)
-            name_map[t] = row['Name']
-    
+        try:
+            df_krx = fdr.StockListing('KRX')
+            code_col = 'Code' if 'Code' in df_krx.columns else 'Symbol'
+            target_market = 'KOSPI' if market == 'KOSPI' else 'KOSDAQ'
+            df_filtered = df_krx[df_krx['Market'] == target_market]
+            
+            # 시가총액/거래량 상위 300개로 제한 (안정성 및 퀄리티 확보)
+            df_top = df_filtered.head(300) 
+            
+            for _, row in df_top.iterrows():
+                symbol = row[code_col]
+                t = f"{symbol}.KS" if market == 'KOSPI' else f"{symbol}.KQ"
+                tickers.append(t)
+                name_map[t] = row['Name']
+        except Exception as e:
+            print(f"Ticker fetch error: {e}")
+            scan_progress[market] = {"status": "IDLE", "percent": 0}
+            return
+
     total_count = len(tickers)
+    if total_count == 0:
+        scan_progress[market] = {"status": "IDLE", "percent": 0}
+        return
+
     scan_progress[market] = {"status": "SCANNING", "percent": 0}
     budget = MY_BUDGET_USD if market == "US" else MY_BUDGET_KRW
     
     try:
-        batch_size = 30 # 서버 안정성을 위해 배치 사이즈 축소
+        batch_size = 20
         scanned = []
         
         for i in range(0, total_count, batch_size):
@@ -125,6 +140,7 @@ def run_full_market_scan(market: str):
                 
                 def analyze(ticker):
                     try:
+                        if ticker not in data.columns.levels[0]: return None
                         hist = data[ticker].dropna(how='all')
                         if len(hist) < 50: return None
                         close = hist['Close']
@@ -132,12 +148,13 @@ def run_full_market_scan(market: str):
                         
                         sma50 = close.rolling(window=50).mean().iloc[-1]
                         sma200 = close.rolling(window=200).mean().iloc[-1]
-                        rsi = calculate_rsi(close).iloc[-1]
+                        rsi_series = calculate_rsi(close)
+                        rsi = rsi_series.iloc[-1] if not rsi_series.empty else 50
                         
                         score = 50
                         if curr_price > sma50: score += 20
                         if sma50 > sma200: score += 20
-                        if 40 < rsi < 70: score += 10 # 과매수/과매도 제외 적정 구간
+                        if 30 < rsi < 75: score += 10
                         
                         if market != "US" and curr_price < 1000: return None
                         
@@ -155,21 +172,26 @@ def run_full_market_scan(market: str):
                 
                 percent = int((min(i + batch_size, total_count) / total_count) * 100)
                 scan_progress[market]["percent"] = percent
-            except: continue
+                print(f"[{market}] Progress: {percent}% ({len(scanned)} hits)")
+            except Exception as e:
+                print(f"Batch error: {e}")
+                continue
         
-        scanned.sort(key=lambda x: x['score'], reverse=True)
-        top_10 = scanned[:10]
-        
-        with db.atomic():
-            PortfolioItem.delete().where(PortfolioItem.market == market).execute()
-            for s in top_10:
-                PortfolioItem.create(**s)
+        if scanned:
+            scanned.sort(key=lambda x: x['score'], reverse=True)
+            top_10 = scanned[:10]
+            
+            with db.atomic():
+                PortfolioItem.delete().where(PortfolioItem.market == market).execute()
+                for s in top_10:
+                    PortfolioItem.create(**s)
+            
+            send_telegram_message(f"✅ {market} 스캔 완료! {len(top_10)}개 종목 선정.")
         
         scan_progress[market] = {"status": "IDLE", "percent": 0}
-        send_telegram_message(f"✅ {market} TOP 10 스캔 완료!")
         
     except Exception as e:
-        print(f"Scan error: {e}")
+        print(f"Global scan error: {e}")
         scan_progress[market] = {"status": "IDLE", "percent": 0}
 
 # --- SCHEDULER ---
