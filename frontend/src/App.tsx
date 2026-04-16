@@ -17,12 +17,12 @@ interface PortfolioItem {
   quantity: number;
   entryDate: string;
 }
+
 function App() {
   const [market, setMarket] = useState<'US' | 'KR'>('US');
   const [ticker, setTicker] = useState('AAPL');
   const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
   const [scanStatus, setScanStatus] = useState({ status: 'IDLE', percent: 0 });
-  const [loading, setLoading] = useState(false);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
@@ -32,7 +32,7 @@ function App() {
     const interval = setInterval(() => {
       fetchPortfolio();
       fetchScanStatus();
-    }, 5000); // 5초마다 갱신
+    }, 5000);
     return () => clearInterval(interval);
   }, [market]);
 
@@ -63,7 +63,24 @@ function App() {
   };
 
   const renderChart = async () => {
-...
+    if (!chartContainerRef.current) return;
+    if (chartRef.current) chartRef.current.remove();
+
+    const chart = createChart(chartContainerRef.current, {
+      layout: { background: { type: ColorType.Solid, color: '#0f1117' }, textColor: '#d1d4dc' },
+      grid: { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
+      width: chartContainerRef.current.clientWidth,
+      height: 450,
+    });
+
+    const series = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350' });
+    try {
+      const res = await axios.get(`${API_BASE_URL}/stocks/${ticker}/history`);
+      series.setData(res.data);
+    } catch (err) { console.error(err); }
+    chartRef.current = chart;
+  };
+
   return (
     <div className="app-container">
       {scanStatus.status !== 'IDLE' && (
@@ -78,23 +95,6 @@ function App() {
         </div>
       )}
 
-      <header className="main-header">
-
-    const chart = createChart(chartContainerRef.current, {
-      layout: { background: { type: ColorType.Solid, color: '#0f1117' }, textColor: '#d1d4dc' },
-      grid: { vertLines: { color: '#1e222d' }, horzLines: { color: '#1e222d' } },
-      width: chartContainerRef.current.clientWidth,
-      height: 450,
-    });
-
-    const series = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350' });
-    const res = await axios.get(`${API_BASE_URL}/stocks/${ticker}/history`);
-    series.setData(res.data);
-    chartRef.current = chart;
-  };
-
-  return (
-    <div className="app-container">
       <header className="main-header">
         <div className="brand">주식<span>인사이트</span> AI</div>
         <div className="market-switches">
