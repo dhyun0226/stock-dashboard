@@ -30,6 +30,21 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MY_BUDGET_KRW = int(os.getenv("MY_BUDGET_KRW", 10000000))
 MY_BUDGET_USD = int(os.getenv("MY_BUDGET_USD", 10000))
 
+# 한국 주식 한글 이름 매핑 (주요 종목)
+KR_NAME_MAP = {
+    "005930.KS": "삼성전자", "000660.KS": "SK하이닉스", "035420.KS": "NAVER", "035720.KS": "카카오",
+    "005380.KS": "현대차", "068270.KS": "셀트리온", "005935.KS": "삼성전자우", "207940.KS": "삼성바이오로직스",
+    "051910.KS": "LG화학", "000270.KS": "기아", "006400.KS": "삼성SDI", "005490.KS": "POSCO홀딩스",
+    "032830.KS": "삼성생명", "012330.KS": "현대모비스", "010950.KS": "S-Oil", "066570.KS": "LG전자",
+    "034730.KS": "SK", "011780.KS": "금호석유", "034220.KS": "LG디스플레이", "010130.KS": "고려아연",
+    "000100.KS": "유한양행", "000720.KS": "현대건설", "017670.KS": "SK텔레콤", "011070.KS": "LG이노텍",
+    "003670.KS": "포스코퓨처엠", "011200.KS": "HMM", "009150.KS": "삼성전기", "015760.KS": "한국전력"
+}
+
+def get_stock_name(ticker, info):
+    if ticker in KR_NAME_MAP: return KR_NAME_MAP[ticker]
+    return info.get('shortName', ticker)
+
 def send_telegram_message(message: str):
     if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN": return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -84,32 +99,58 @@ def calculate_strategy(ticker, price, hist, budget):
 # --- ENGINE ---
 
 def run_full_market_scan(market: str):
-    tickers = ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA", "META", "AMD", "PLTR"] if market == "US" else ["005930.KS", "000660.KS", "035420.KS", "035720.KS", "005380.KS", "068270.KS"]
+    if market == "US":
+        tickers = [
+            "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "BRK-B", "V", "UNH", 
+            "LLY", "JPM", "AVGO", "XOM", "MA", "JNJ", "PG", "COST", "HD", "ABBV", 
+            "MRK", "ADBE", "CRM", "CVX", "NFLX", "AMD", "PEP", "TMO", "KO", "WMT",
+            "MCD", "DIS", "CSCO", "INTC", "PFE", "ORCL", "BAC", "CMCSA", "VZ", "PLTR",
+            "SNPS", "CDNS", "INTU", "ISRG", "GE", "NOW", "IBM", "CAT", "HON", "AMGN"
+        ]
+    else:
+        tickers = [
+            "005930.KS", "000660.KS", "035420.KS", "035720.KS", "005380.KS", "068270.KS",
+            "005935.KS", "207940.KS", "051910.KS", "000270.KS", "006400.KS", "005490.KS",
+            "032830.KS", "012330.KS", "010950.KS", "066570.KS", "034730.KS", "011780.KS",
+            "034220.KS", "010130.KS", "000100.KS", "000720.KS", "017670.KS", "011070.KS",
+            "003670.KS", "011200.KS", "009150.KS", "015760.KS", "033780.KS", "018260.KS"
+        ]
+    
     index_ticker = "^GSPC" if market == "US" else "^KS11"
     budget = MY_BUDGET_USD if market == "US" else MY_BUDGET_KRW
     currency = "$" if market == "US" else "원"
     
     try:
         data = yf.download(tickers, period="1y", group_by="ticker", threads=True, progress=False)
-        idx_perf = (yf.Ticker(index_ticker).history(period="3mo")['Close'].iloc[-1] / yf.Ticker(index_ticker).history(period="3mo")['Close'].iloc[0]) - 1
         
         results = []
         def analyze(ticker):
             try:
                 hist = data[ticker].dropna(how='all')
-                close = hist['Close']; info = yf.Ticker(ticker).info
-                if close.iloc[-1] < close.rolling(window=50).mean().iloc[-1]: return None
+                if hist.empty: return None
+                close = hist['Close']
+                info = yf.Ticker(ticker).info
+                
+                # 점수 계산 (추세 + 모멘텀)
+                sma50 = close.rolling(window=50).mean().iloc[-1]
+                sma200 = close.rolling(window=200).mean().iloc[-1]
+                score = 50
+                if close.iloc[-1] > sma50: score += 20
+                if sma50 > sma200: score += 20
+                if close.iloc[-1] > close.iloc[-5]: score += 10 # 최근 5일 상승
+                
                 qty, target, stop = calculate_strategy(ticker, close.iloc[-1], hist, budget)
                 return {
-                    "market": market, "ticker": ticker, "name": info.get('shortName', ticker),
+                    "market": market, "ticker": ticker, "name": get_stock_name(ticker, info),
                     "entry_price": float(close.iloc[-1]), "current_price": float(close.iloc[-1]), "max_price": float(close.iloc[-1]),
-                    "score": 80, "reason": "강력 추세 유지", "target_price": target, "stop_loss": stop, "quantity": qty
+                    "score": score, "reason": "AI 추세 분석 완료", "target_price": target, "stop_loss": stop, "quantity": qty
                 }
             except: return None
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             scanned = [r for r in list(executor.map(analyze, tickers)) if r]
         
+        # 무조건 점수 높은 순으로 상위 10개 추출
         scanned.sort(key=lambda x: x['score'], reverse=True)
         top_10 = scanned[:10]
         new_tickers = [s['ticker'] for s in top_10]

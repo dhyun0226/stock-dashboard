@@ -64,29 +64,29 @@ function App() {
   return (
     <div className="app-container">
       <header className="main-header">
-        <div className="brand">STOCK<span>INSIGHT</span> AI</div>
+        <div className="brand">주식<span>인사이트</span> AI</div>
         <div className="market-switches">
-          <button className={market === 'US' ? 'active' : ''} onClick={() => setMarket('US')}>US MARKET</button>
-          <button className={market === 'KR' ? 'active' : ''} onClick={() => setMarket('KR')}>KR MARKET</button>
+          <button className={market === 'US' ? 'active' : ''} onClick={() => setMarket('US')}>미국 시장</button>
+          <button className={market === 'KR' ? 'active' : ''} onClick={() => setMarket('KR')}>한국 시장</button>
         </div>
       </header>
 
       <main className="main-layout">
         <section className="portfolio-section card">
           <div className="section-header">
-            <h3>AI Active Portfolio (Top 10)</h3>
-            <span className="live-badge">LIVE MONITORING</span>
+            <h3>AI 액티브 포트폴리오 (상위 10선)</h3>
+            <span className="live-badge">실시간 모니터링</span>
           </div>
           <div className="portfolio-table-wrapper">
             <table className="portfolio-table">
               <thead>
                 <tr>
-                  <th>Ticker</th>
-                  <th>Entry Price</th>
-                  <th>Current</th>
-                  <th>Yield (Max)</th>
-                  <th>Target (Stop)</th>
-                  <th>Qty</th>
+                  <th>종목</th>
+                  <th>매수 권장가</th>
+                  <th>현재가</th>
+                  <th>수익률 (최고)</th>
+                  <th>목표(손절)</th>
+                  <th>수량</th>
                 </tr>
               </thead>
               <tbody>
@@ -100,13 +100,13 @@ function App() {
                     <td className={item.currentYield >= 0 ? 'up' : 'down'}>{item.currentPrice.toLocaleString()}</td>
                     <td>
                       <div className={`yield ${item.currentYield >= 0 ? 'up' : 'down'}`}>{item.currentYield}%</div>
-                      <div className="max-yield">Max: {item.maxYield}%</div>
+                      <div className="max-yield">최고: {item.maxYield}%</div>
                     </td>
                     <td>
-                      <div className="target">T: {item.targetPrice.toLocaleString()}</div>
-                      <div className="stop">S: {item.stopLoss.toLocaleString()}</div>
+                      <div className="target">목표: {item.targetPrice.toLocaleString()}</div>
+                      <div className="stop">손절: {item.stopLoss.toLocaleString()}</div>
                     </td>
-                    <td>{item.quantity}</td>
+                    <td>{item.quantity}주</td>
                   </tr>
                 ))}
               </tbody>
@@ -116,7 +116,7 @@ function App() {
 
         <section className="chart-section card">
           <div className="chart-header">
-            <h2>{ticker} Real-time Analysis</h2>
+            <h2>{ticker} 실시간 AI 분석 차트</h2>
           </div>
           <div ref={chartContainerRef} className="chart-box"></div>
         </section>
