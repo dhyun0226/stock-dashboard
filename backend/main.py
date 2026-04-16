@@ -9,6 +9,9 @@ from peewee import *
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 import requests
+import FinanceDataReader as fdr
+import os
+from dotenv import load_dotenv
 
 app = FastAPI()
 
@@ -20,30 +23,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-import os
-from dotenv import load_dotenv
-
 # --- CONFIGURATION ---
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 MY_BUDGET_KRW = int(os.getenv("MY_BUDGET_KRW", 10000000))
 MY_BUDGET_USD = int(os.getenv("MY_BUDGET_USD", 10000))
-
-# 한국 주식 한글 이름 매핑 (주요 종목)
-KR_NAME_MAP = {
-    "005930.KS": "삼성전자", "000660.KS": "SK하이닉스", "035420.KS": "NAVER", "035720.KS": "카카오",
-    "005380.KS": "현대차", "068270.KS": "셀트리온", "005935.KS": "삼성전자우", "207940.KS": "삼성바이오로직스",
-    "051910.KS": "LG화학", "000270.KS": "기아", "006400.KS": "삼성SDI", "005490.KS": "POSCO홀딩스",
-    "032830.KS": "삼성생명", "012330.KS": "현대모비스", "010950.KS": "S-Oil", "066570.KS": "LG전자",
-    "034730.KS": "SK", "011780.KS": "금호석유", "034220.KS": "LG디스플레이", "010130.KS": "고려아연",
-    "000100.KS": "유한양행", "000720.KS": "현대건설", "017670.KS": "SK텔레콤", "011070.KS": "LG이노텍",
-    "003670.KS": "포스코퓨처엠", "011200.KS": "HMM", "009150.KS": "삼성전기", "015760.KS": "한국전력"
-}
-
-def get_stock_name(ticker, info):
-    if ticker in KR_NAME_MAP: return KR_NAME_MAP[ticker]
-    return info.get('shortName', ticker)
 
 def send_telegram_message(message: str):
     if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN": return
@@ -59,7 +44,7 @@ class PortfolioItem(Model):
     market = CharField()
     ticker = CharField()
     name = CharField()
-    entry_price = FloatField() # 매수 권장가 (장 마감가)
+    entry_price = FloatField()
     current_price = FloatField()
     max_price = FloatField()
     score = FloatField()
@@ -99,58 +84,71 @@ def calculate_strategy(ticker, price, hist, budget):
 # --- ENGINE ---
 
 def run_full_market_scan(market: str):
+    tickers = []
+    name_map = {}
+    
     if market == "US":
         tickers = [
             "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "BRK-B", "V", "UNH", 
             "LLY", "JPM", "AVGO", "XOM", "MA", "JNJ", "PG", "COST", "HD", "ABBV", 
-            "MRK", "ADBE", "CRM", "CVX", "NFLX", "AMD", "PEP", "TMO", "KO", "WMT",
-            "MCD", "DIS", "CSCO", "INTC", "PFE", "ORCL", "BAC", "CMCSA", "VZ", "PLTR",
-            "SNPS", "CDNS", "INTU", "ISRG", "GE", "NOW", "IBM", "CAT", "HON", "AMGN"
+            "MRK", "ADBE", "CRM", "CVX", "NFLX", "AMD", "PEP", "TMO", "KO", "WMT"
         ]
     else:
-        tickers = [
-            "005930.KS", "000660.KS", "035420.KS", "035720.KS", "005380.KS", "068270.KS",
-            "005935.KS", "207940.KS", "051910.KS", "000270.KS", "006400.KS", "005490.KS",
-            "032830.KS", "012330.KS", "010950.KS", "066570.KS", "034730.KS", "011780.KS",
-            "034220.KS", "010130.KS", "000100.KS", "000720.KS", "017670.KS", "011070.KS",
-            "003670.KS", "011200.KS", "009150.KS", "015760.KS", "033780.KS", "018260.KS"
-        ]
+        print("Fetching all KRX tickers...")
+        df_krx = fdr.StockListing('KRX')
+        for _, row in df_krx.iterrows():
+            symbol = row['Symbol']
+            m_type = row['Market']
+            if m_type == 'KOSPI': t = f"{symbol}.KS"
+            elif m_type == 'KOSDAQ': t = f"{symbol}.KQ"
+            else: continue
+            tickers.append(t)
+            name_map[t] = row['Name']
     
-    index_ticker = "^GSPC" if market == "US" else "^KS11"
     budget = MY_BUDGET_USD if market == "US" else MY_BUDGET_KRW
     currency = "$" if market == "US" else "원"
     
+    print(f"Starting {market} Scan: {len(tickers)} targets.")
+    
     try:
-        data = yf.download(tickers, period="1y", group_by="ticker", threads=True, progress=False)
+        batch_size = 100
+        scanned = []
         
-        results = []
-        def analyze(ticker):
+        for i in range(0, len(tickers), batch_size):
+            batch = tickers[i:i+batch_size]
             try:
-                hist = data[ticker].dropna(how='all')
-                if hist.empty: return None
-                close = hist['Close']
-                info = yf.Ticker(ticker).info
+                data = yf.download(batch, period="1y", group_by="ticker", threads=True, progress=False)
                 
-                # 점수 계산 (추세 + 모멘텀)
-                sma50 = close.rolling(window=50).mean().iloc[-1]
-                sma200 = close.rolling(window=200).mean().iloc[-1]
-                score = 50
-                if close.iloc[-1] > sma50: score += 20
-                if sma50 > sma200: score += 20
-                if close.iloc[-1] > close.iloc[-5]: score += 10 # 최근 5일 상승
-                
-                qty, target, stop = calculate_strategy(ticker, close.iloc[-1], hist, budget)
-                return {
-                    "market": market, "ticker": ticker, "name": get_stock_name(ticker, info),
-                    "entry_price": float(close.iloc[-1]), "current_price": float(close.iloc[-1]), "max_price": float(close.iloc[-1]),
-                    "score": score, "reason": "AI 추세 분석 완료", "target_price": target, "stop_loss": stop, "quantity": qty
-                }
-            except: return None
+                def analyze(ticker):
+                    try:
+                        hist = data[ticker].dropna(how='all')
+                        if len(hist) < 100: return None
+                        close = hist['Close']
+                        curr_price = float(close.iloc[-1])
+                        
+                        sma50 = close.rolling(window=50).mean().iloc[-1]
+                        sma200 = close.rolling(window=200).mean().iloc[-1]
+                        score = 50
+                        if curr_price > sma50: score += 20
+                        if sma50 > sma200: score += 20
+                        if curr_price > close.iloc[-5]: score += 10
+                        
+                        if market == "KR" and curr_price < 1000: return None # 동전주 제외
+                        
+                        qty, target, stop = calculate_strategy(ticker, curr_price, hist, budget)
+                        return {
+                            "market": market, "ticker": ticker, "name": name_map.get(ticker, ticker),
+                            "entry_price": curr_price, "current_price": curr_price, "max_price": curr_price,
+                            "score": score, "reason": "전 종목 AI 분석", "target_price": target, "stop_loss": stop, "quantity": qty
+                        }
+                    except: return None
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            scanned = [r for r in list(executor.map(analyze, tickers)) if r]
+                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                    batch_res = [r for r in list(executor.map(analyze, batch)) if r]
+                scanned.extend(batch_res)
+                print(f"Progress: {i+len(batch)}/{len(tickers)}")
+            except: continue
         
-        # 무조건 점수 높은 순으로 상위 10개 추출
         scanned.sort(key=lambda x: x['score'], reverse=True)
         top_10 = scanned[:10]
         new_tickers = [s['ticker'] for s in top_10]
@@ -159,13 +157,14 @@ def run_full_market_scan(market: str):
             PortfolioItem.update(status="EXITED", exit_date=datetime.datetime.now(), exit_price=PortfolioItem.current_price).where((PortfolioItem.market == market) & (PortfolioItem.status == "ACTIVE") & (PortfolioItem.ticker << new_tickers == False)).execute()
             for s in top_10:
                 item, created = PortfolioItem.get_or_create(market=market, ticker=s['ticker'], status="ACTIVE", defaults=s)
-                if not created: item.current_price = s['entry_price']; item.save()
+                if not created: 
+                    item.current_price = s['entry_price']
+                    item.save()
         
-        # --- 리포트 발송 ---
         msg = f"📍 *[AI 가이드] 오늘의 {market} 핵심 전략*\n\n"
         for i in top_10:
             msg += f"✅ *{i['name']}* ({i['ticker']})\n"
-            msg += f"   • 매수 권장가: `{i['entry_price']:,}{currency}` (±1.5% 진입)\n"
+            msg += f"   • 매수 권장가: `{i['entry_price']:,}{currency}`\n"
             msg += f"   • 권장 수량: `{i['quantity']}주`\n"
             msg += f"   • 익절가: `{i['target_price']:,}{currency}`\n"
             msg += f"   • 손절가: `{i['stop_loss']:,}{currency}`\n\n"
@@ -185,24 +184,6 @@ def monitor_market_signals():
             item.current_price = curr_price
             if curr_price > item.max_price: item.max_price = curr_price
             item.save()
-            
-            currency = "$" if active_market == "US" else "원"
-            # 1. 매수 적기 알림 (권장가 돌파 시)
-            if not item.buy_alert_sent and curr_price >= item.entry_price * 1.01:
-                alert = f"🚀 *[매수 진입] {item.ticker} ({item.name})*\n"
-                alert += f"매수 권장가 돌파! 현재가 `{curr_price:,.0f}{currency}`\n"
-                alert += f"지금 바로 `{item.quantity}주` 진입을 권장합니다.\n"
-                alert += f"익절: {item.target_price:,} | 손절: {item.stop_loss:,}"
-                send_telegram_message(alert)
-                item.buy_alert_sent = True; item.save()
-            
-            # 2. 익절/손절 알림 (동일)
-            elif not item.target_alert_sent and curr_price >= item.target_price:
-                send_telegram_message(f"💰 *[익절!] {item.ticker}* 목표가 도달! 현재가: {curr_price:,.0f}{currency}")
-                item.target_alert_sent = True; item.save()
-            elif not item.stop_alert_sent and curr_price <= item.stop_loss:
-                send_telegram_message(f"🚨 *[손절!] {item.ticker}* 생명선 이탈! 현재가: {curr_price:,.0f}{currency}")
-                item.stop_alert_sent = True; item.save()
         except: continue
 
 scheduler = BackgroundScheduler(timezone="Asia/Seoul")
@@ -211,11 +192,9 @@ scheduler.add_job(run_full_market_scan, CronTrigger(hour=6, minute=5), args=['US
 scheduler.add_job(monitor_market_signals, 'interval', minutes=1)
 scheduler.start()
 
-# --- API ---
 @app.get("/api/portfolio")
-async def get_ai_portfolio(market: str = "US", show_history: bool = False):
-    status = "EXITED" if show_history else "ACTIVE"
-    items = PortfolioItem.select().where((PortfolioItem.market == market) & (PortfolioItem.status == status)).order_by(PortfolioItem.entry_date.desc())
+async def get_ai_portfolio(market: str = "US"):
+    items = PortfolioItem.select().where((PortfolioItem.market == market) & (PortfolioItem.status == "ACTIVE")).order_by(PortfolioItem.score.desc())
     return [{
         "ticker": i.ticker, "name": i.name, "entryPrice": i.entry_price, "currentPrice": i.current_price,
         "currentYield": round(((i.current_price/i.entry_price)-1)*100, 2), "maxYield": round(((i.max_price/i.entry_price)-1)*100, 2),
@@ -223,10 +202,15 @@ async def get_ai_portfolio(market: str = "US", show_history: bool = False):
         "entryDate": i.entry_date.strftime('%Y-%m-%d'), "status": i.status
     } for i in items]
 
+@app.get("/api/stocks/{ticker}/history")
+async def get_stock_history(ticker: str):
+    data = yf.Ticker(ticker).history(period="1y")
+    return [{"time": int(index.timestamp()), "open": row["Open"], "high": row["High"], "low": row["Low"], "close": row["Close"]} for index, row in data.iterrows()]
+
 @app.post("/api/rebalance")
 async def trigger_manual_rebalance(market: str, background_tasks: BackgroundTasks):
     background_tasks.add_task(run_full_market_scan, market)
-    return {"message": "Scanning started."}
+    return {"message": "Full Scan started."}
 
 if __name__ == "__main__":
     import uvicorn
